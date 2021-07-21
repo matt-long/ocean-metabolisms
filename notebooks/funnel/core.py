@@ -266,12 +266,7 @@ class Collection(object):
     def _generate_dset(self, key, variable, is_derived, catalog_subset_var, key_info, **kwargs):
         """Do the computation necessary to make `dsets`"""
         
-        # check for variable in catalog
-        # TODO: we're handling empty results below: 
-        #       suppress intake-esm warning or change logic
-           
-        dset = catalog_subset_var.search(**key_info[key]).to_dataset_dict(**kwargs)
-        
+        dset = catalog_subset_var.search(**key_info[key]).to_dataset_dict(**kwargs)      
         assert len(dset.keys()) == 1, (
             f'expecting a single key ({key})\nfound the following: {dset.keys()}'
         )
@@ -288,7 +283,7 @@ class Collection(object):
         for op, kw in zip(self.operators, self.ops_kwargs):
             if hash(op) in _QUERY_DEPENDENT_OP_REGISTRY:
                 op_obj = _QUERY_DEPENDENT_OP_REGISTRY[hash(op)] 
-                query_dict = key_info[key]
+                query_dict = dict(**key_info[key])
                 query_dict['variable'] = variable
                 ds = op_obj(
                     ds, 
@@ -501,10 +496,10 @@ def to_intake_esm():
     
     lines = []    
     for f in files:        
-        column_data = groupby_attrs_values[data[f]['key']] 
+        column_data = dict(**groupby_attrs_values[data[f]['key']])
         column_data['variable'] = data[f]['variable']
         column_data['name'] = data[f]['name']
-        column_data['path'] = f
+        column_data['path'] = data[f]['asset']
         lines.append(column_data)
     
     df = pd.DataFrame(lines)        
