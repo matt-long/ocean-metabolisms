@@ -9,16 +9,18 @@ dependencies:
 - cf_units
 - cftime
 - cmocean
+- conda-lock
 - dask==2.14
 - distributed==2.14
-- dask-jobqueue
+- dask-jobqueue=0.7.1
 - dask-mpi
 - eofs
 - esmpy
 - holoviews
 - intake
 - intake-esm
-- ipywidgets
+- ipykernel
+- jupyter-server-proxy
 - jupyter_contrib_nbextensions
 - jupyterlab
 - lmfit
@@ -29,7 +31,7 @@ dependencies:
 - netcdf4
 - numba
 - numpy
-- pandas
+- pandas=1.2.5 # pinned to avoid indexing error: ds.sel(time=slice('1920', '2100'))
 - pint
 - pip
 - pop-tools
@@ -39,7 +41,6 @@ dependencies:
 - seaborn
 - seawater
 - statsmodels
-- tabulate
 - toolz
 - tqdm
 - watermark

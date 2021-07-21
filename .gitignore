@@ -2,3 +2,5 @@
 **/__pycache__
 notes
 *.xlsx
+notebooks/cruft.py
+notebooks/dask-worker-space

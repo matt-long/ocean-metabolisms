@@ -1,0 +1,14 @@
+asset: /glade/scratch/mclong/ocean-metabolism/funnel-cache/8fcc769db7d90e1e1d00b5f08b3a3a4a.zarr
+esm_collection: data/catalogs/glade-cesm1-le.json
+key: CTRL.ocn.pop.h.1
+name: linear-drift
+operator_kwargs:
+- {}
+- {}
+- {}
+operators:
+- compute_time
+- sel_time_slice
+- compute_drift
+preprocess: _preprocess_pop_h_upper_1km
+variable: SALT

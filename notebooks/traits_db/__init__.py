@@ -36,8 +36,8 @@ df_full = pd.read_csv(file_csv,
 
 df_mi = pd.DataFrame(dict(
     Species=df_full['Species'],
-    Ao=1./df_full['Vh (atm)'],
-    Ac=1./df_full['Vh (atm)']/df_full['Phi_crit (histogram)'],
+    Ao=1. /d f_full['Vh (atm)'],
+    Ac=1. / df_full['Vh (atm)'] / df_full['Phi_crit (histogram)'],
     Eo=df_full['Eo (eV)'],
 ))
 df_mi = df_mi.dropna()
