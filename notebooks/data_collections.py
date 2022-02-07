@@ -5,7 +5,7 @@ import xarray as xr
 
 import funnel as fn
 import operators as ops
-import metabolic
+import thermodyn
 
 
 USER = os.environ['USER']    
@@ -21,7 +21,6 @@ ocean_bgc_member_ids = [
     31, 32, 33, 34, 35, 
     101, 102, 103, 104, 105,
 ]
-ocean_bgc_member_ids = ocean_bgc_member_ids[0:3]
 
 time_slice = slice('1920', '2100')
 drift_year_0 = 1920
@@ -41,14 +40,18 @@ def _preprocess_pop_h_upper_1km(ds):
     """drop unneeded variables and set grid var to coords"""      
     grid_vars = ['KMT', 'TAREA', 'TLAT', 'TLONG', 'z_t', 'dz', 'z_t_150m', 'time', 'time_bound']    
     data_vars = list(filter(lambda v: 'time' in ds[v].dims, ds.data_vars))
-    ds = ds[data_vars+grid_vars].sel(z_t=slice(0, 1000e2)) # top 1000 m
+    ds = ds[data_vars + grid_vars].sel(z_t=slice(0, 1000e2)) # top 1000 m
     new_coords = set(grid_vars) - set(ds.coords)   
     return ds.set_coords(new_coords)
 
 
 def drift(**query):
     assert 'stream' in query    
-    postproccess = [compute_time, sel_time_slice, compute_drift]    
+    postproccess = [
+        compute_time,
+        sel_time_slice, 
+        compute_drift,
+    ]    
     return fn.Collection(
         name='linear-drift',
         esm_collection_json=catalog_json,
@@ -85,17 +88,6 @@ def drift_corrected_ens(**query):
     )
 
 
-def drift_corrected_derived(**query):
-    """compute derived variable on drift corrected data"""
-    query['name'] = 'drift-corrected'
-    return fn.Collection(
-        name='drift-corrected-derived',
-        esm_collection_json=fn.to_intake_esm(),
-        query=query,
-        cache_dir=cache_dir,
-        persist=True,        
-    )
-    
     
 @fn.register_query_dependent_op(
     query_keys=['variable', 'stream'],
@@ -164,14 +156,7 @@ def compute_drift(ds_ctrl):
     dependent_vars=['TEMP', 'SALT', 'O2'],
 )
 def compute_pO2(ds):
-    ds = ds.copy()
-    Z_meter = xr.full_like(ds.TEMP, fill_value=1e-2) * ds.z_t
-    pO2 = xr.apply_ufunc(
-        metabolic.compute_pO2,
-        ds.O2, ds.TEMP, ds.SALT, Z_meter,
-        vectorize=True,
-        dask='parallelized',
-    )
-    pO2.attrs = {'units': 'atm', 'long_name': 'pO$_2$'}
-    ds['pO2'] = pO2
-    return ds
+    """Compute the partial pressure of O2 and drop dependent variables.
+    """
+    ds['pO2'] = thermodyn.compute_pO2(ds.O2, ds.TEMP, ds.SALT, ds.z_t * 1e-2, isPOP=True)    
+    return ds.drop(['TEMP', 'SALT', 'O2'])

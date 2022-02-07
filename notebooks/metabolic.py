@@ -1,20 +1,78 @@
-import numpy as np
-import seawater as sw
+import os
 from functools import partial
 
+import intake
+import numpy as np
+from scipy import stats as scistats
+
+import pandas as pd
 from scipy.optimize import newton
 
-kb = 8.6e-5 # eV/K
-kb_inv = 1./kb
-R_gasconst = 8.3144621 # J/mol/K
-T0_Kelvin = 273.15
+import constants
+
 
 Tref = 15. # °C
-Tref_K = Tref + T0_Kelvin
-
-XiO2 = 0.209 # Mean atmospheric O2 mixing ratio
+Tref_K = Tref + constants.T0_Kelvin
 
 
+def open_traits_df(pressure_kPa=True):
+    """Open the MI traits dataset from Deutsh et al. (2020); return a pandas.DataFrame
+    
+    """
+    
+    path_to_here = os.path.dirname(os.path.realpath(__file__))
+    cache_file = f'{path_to_here}/data/MI-traits-data/MI-traits-Deutsch-etal-2020.json'
+    os.rename(cache_file, f'{cache_file}.old')
+
+    try:
+        cat = intake.open_catalog("data/MI-traits-data/catalog-metabolic-index-traits.yml")
+        data = cat['MI-traits'].read()
+
+        df = pd.DataFrame()
+        for key, info in data.items():
+            attrs = info['attrs']
+            data_type = info['data_type']
+
+            if data_type == 'string':
+                values = np.array(info['data'])
+            else:
+                values = np.array(info['data']).astype(np.float64)                               
+                scale_factor = 1.0
+                if pressure_kPa:
+                    if 'units' in attrs:            
+                        if attrs['units'] == '1/atm':
+                            scale_factor = 1.0 / constants.kPa_per_atm
+                            attrs['units'] = '1/kPa'
+                        elif attrs['units'] == 'atm':
+                            scale_factor = constants.kPa_per_atm            
+                            attrs['units'] = 'kPa'                        
+                values *= scale_factor
+
+            df[key] = values
+            df[key].attrs = attrs
+        os.remove(f'{cache_file}.old')
+    except:
+        print('trait db access failed')
+        os.rename(f'{cache_file}.old', cache_file)
+        raise
+       
+    return df
+
+
+class trait_pdf(object):
+    """Class to simplify fitting trait PDFs and returning functions"""
+    def __init__(self, df, trait):
+        self.dist_type = 'norm' if trait in ['Eo'] else 'lognorm'
+        self.pdf_func = scistats.norm if trait in ['Eo'] else scistats.lognorm
+        self.beta = self.pdf_func.fit(df[trait].values)            
+        
+    def fitted(self, bins):
+        return self.pdf_func.pdf(bins, *self.beta)
+
+    def median(self):
+        return self.pdf_func.median(*self.beta)
+
+    
 def compute_ATmax(pO2, Ac, Eo, dEodT=0.):
     """
     Compute the maximum temperature at which resting or active (sustained)
@@ -70,102 +128,16 @@ def Phi(pO2, T, Ac, Eo, dEodT=0.):
     return Ac * pO2 * _Phi_exp(T, Eo, dEodT)
 
 
-def pO2_at_Phi_crit(T, Ac, Eo, dEodT=0.):
-    """compute pO2 at Φcrit"""
+def pO2_at_Phi_one(T, Ac, Eo, dEodT=0.):
+    """compute pO2 at Φ = 1"""
     return np.reciprocal(Ac * _Phi_exp(T, Eo, dEodT))
 
 
 def _Phi_exp(T, Eo, dEodT):
-    T_K = T + T0_Kelvin
-    return np.exp(kb_inv * (Eo + dEodT * (T_K - Tref_K)) * (1./T_K - 1./Tref_K))
+    T_K = T + constants.T0_Kelvin
+    return np.exp(constants.kb_inv * (Eo + dEodT * (T_K - Tref_K)) * (1.0 / T_K - 1.0 / Tref_K))
 
 
-def compute_pO2(O2, T, S, depth):
-    """
-    Compute the partial pressure of O2 in seawater including 
-    correction for the effect of hydrostatic pressure of the 
-    water column based on Enns et al., J. Phys. Chem. 1964
-      d(ln p)/dP = V/RT
-    where p = partial pressure of O2, P = hydrostatic pressure
-    V = partial molar volume of O2, R = gas constant, T = temperature
-    
-    Parameters
-    ----------
-    O2 : float
-      Oxygen concentration (mmol/m3)
-    
-    T : float
-       Temperature (°C)
-    
-    S : float
-       Salinity 
-       
-    depth : float
-       Depth (m)
-       
-    Returns
-    -------
-    pO2 : float
-       Partial pressure (atm)
-       
-    """
-    
-    V = 32e-6 # partial molar volume of O2 (m3/mol)
-    Patm = 1. # Atm pressure
-    
-    T_K = T + T0_Kelvin
-    
-    db2Pa = 1e4 # convert pressure: decibar to Pascal
 
-    # Solubility with pressure effect
-    P = sw.pres(depth, lat=0.)  # seawater pressure [db] !! Warning - z*0 neglects gravity differences w/ latitude
-    rho = sw.dens(S, T, depth)  # seawater density [kg/m3]
-
-    dP = P * db2Pa
-    pCor = np.exp(V * dP / (R_gasconst * T_K))
-
-    Kh = 1e-3 * O2sol(S, T) * rho / (Patm * XiO2) # solubility [mmol/m3/atm]
-    
-    return (O2 / Kh) * pCor
-
-
-def O2sol(S, T):
-    """
-    Solubility of O2 in sea water
-    INPUT:
-    S = salinity    [PSS]
-    T = temperature [degree C]
-
-    conc = solubility of O2 [mmol/m^3]
-
-    REFERENCE:
-    Hernan E. Garcia and Louis I. Gordon, 1992.
-    "Oxygen solubility in seawater: Better fitting equations"
-    Limnology and Oceanography, 37, pp. 1307-1312.
-    """
-
-    # constants from Table 4 of Hamme and Emerson 2004
-    return _garcia_gordon_polynomial(S, T,
-                                     A0 = 5.80871,
-                                     A1 = 3.20291,
-                                     A2 = 4.17887,
-                                     A3 = 5.10006,
-                                     A4 = -9.86643e-2,
-                                     A5 = 3.80369,
-                                     B0 = -7.01577e-3,
-                                     B1 = -7.70028e-3,
-                                     B2 = -1.13864e-2,
-                                     B3 = -9.51519e-3,
-                                     C0 = -2.75915e-7)
-
-
-def _garcia_gordon_polynomial(S,T,
-                              A0 = 0., A1 = 0., A2 = 0., A3 = 0., A4 = 0., A5 = 0.,
-                              B0 = 0., B1 = 0., B2 = 0., B3 = 0.,
-                              C0 = 0.):
-
-    T_scaled = np.log((298.15 - T) /(T0_Kelvin + T))
-    return np.exp(A0 + A1*T_scaled + A2*T_scaled**2. + A3*T_scaled**3. + A4*T_scaled**4. + A5*T_scaled**5. + \
-                  S*(B0 + B1*T_scaled + B2*T_scaled**2. + B3*T_scaled**3.) + C0 * S**2.)
 
 

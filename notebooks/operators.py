@@ -2,6 +2,13 @@ import cftime
 import numpy as np
 import xarray as xr
 
+import pop_tools
+
+R_gasconst = 8.3144621 # J/mol/K
+T0_Kelvin = 273.15
+XiO2 = 0.209 # Mean atmospheric O2 mixing ratio
+
+
 def _get_tb_name_and_tb_dim(ds):
     """return the name of the time 'bounds' variable and its second dimension"""
     assert 'bounds' in ds.time.attrs, 'missing "bounds" attr on time'
@@ -203,4 +210,5 @@ def year_frac_noleap(time):
     t0_year = np.array([to_datenum(y, 1, 1) - 1 for y in year])
     t_year = np.array([to_datenum(y, m, d) for y, m, d in zip(year, month, day)])    
     return year + (t_year - t0_year) / 365.    
+
 

@@ -14,6 +14,7 @@ import intake
 
 import pandas as pd
 import dask
+import numpy as np
 import xarray as xr
 
 from toolz import curry
@@ -97,11 +98,14 @@ class Collection(object):
         #       differ based on the fields of the `query` other than the `groupby_attrs`. 
         with open(esm_collection_json) as fid:
             catalog_def = json.load(fid)
+        
         groupby_attrs = catalog_def['aggregation_control']['groupby_attrs']        
         assert not (set(query.keys()) - set(groupby_attrs)), (
             f'queries can only include the following fields: {groupby_attrs}'
         )
-                    
+        self.groupby_attrs = groupby_attrs     
+        self.catalog_name = catalog_def['id']
+        
         # setup cache info
         assert cache_format in ['nc', 'zarr'], f'unsupported format {cache_format}'             
         self._format = cache_format        
@@ -294,11 +298,11 @@ class Collection(object):
                 ds = op(ds, **kw)
 
         if self.persist:
-            self._make_cache(ds, key, variable)
+            self._make_cache(ds, key, variable, key_info)
 
         return ds
     
-    def _make_cache(self, ds, key, variable):
+    def _make_cache(self, ds, key, variable, key_info):
         """write cache file"""
         
         token = self._gen_cache_token(key, variable)
@@ -306,7 +310,7 @@ class Collection(object):
         cache_id_dict = self.origins_dict.copy()
         cache_id_dict['key'] = key
         cache_id_dict['variable'] = variable
-        cache_id_dict['asset'] = self._gen_cache_file_name(key, variable)        
+        cache_id_dict['asset'] = self._gen_cache_file_name(key_info[key], variable)        
         if self._format == 'nc':
             ds.to_netcdf(cache_id_dict['asset'])            
         elif self._format == 'zarr':
@@ -360,12 +364,23 @@ class Collection(object):
     def _gen_cache_token(self, key, variable):
         return dask.base.tokenize(self.origins_dict, key, variable)
         
-    def _gen_cache_file_name(self, key, variable):
+    def _gen_cache_file_name(self, key_info, variable):
         """generate a file cache name"""
         # TODO: accept a user-provided callable to generate human-readable
         #       file name
-        token_key = self._gen_cache_token(key, variable)
-        return f'{self.cache_dir}/{token_key}.{self._format}'
+        
+        basename_parts = [self.catalog_name]
+        for key in self.groupby_attrs:
+            if key == 'member_id':
+                int_value = np.int(key_info[key])
+                basename_parts.append(f'{int_value:03d}')
+            else:
+                basename_parts.append(key_info[key])                
+        basename_parts.append(variable)                
+        basename_parts.append(self.name)
+        
+        basename = '.'.join(basename_parts)
+        return f'{self.cache_dir}/{basename}.{self._format}'
     
     def _gen_cache_id_file_name(self, key, variable):
         """generate a unique cache file name"""
@@ -470,11 +485,11 @@ def intake_esm_get_keys_info(cat):
     return key_info
 
 
-def to_intake_esm():
+def to_intake_esm(agg_member_id=True, include_add_coords=True):
     """generate an intake-esm data catalog from funnel collections"""
     
     catalog_csv_file = f'{cache_catalog_dir}/collection-summary.csv.gz'
-    catalog_json_file = f'{cache_catalog_dir}/collection-summary.json'
+    catalog_json_file = f'{cache_catalog_dir}/collection-summary-agg_member_id-{agg_member_id}.json'
     
     files = sorted(glob(f'{cache_catalog_dir}/*.yml'))
     data = {}
@@ -494,14 +509,32 @@ def to_intake_esm():
     first_key = list(groupby_attrs_values.keys())[0]
     columns = list(groupby_attrs_values[first_key].keys()) + ['variable', 'name', 'path']
     
+    
+    add_coords = []
+    if include_add_coords:    
+        for f in files:  
+            if 'additional_coord_values' in data[f]:
+                for k in data[f]['additional_coord_values'].keys():
+                    add_coords.append(k)
+        add_coords = list(set(add_coords))
+        columns += add_coords
+        
     lines = []    
     for f in files:        
         column_data = dict(**groupby_attrs_values[data[f]['key']])
         column_data['variable'] = data[f]['variable']
         column_data['name'] = data[f]['name']
         column_data['path'] = data[f]['asset']
+        if add_coords:
+            for k in add_coords:
+                column_data[k] = np.nan                        
+            if 'additional_coord_values' in data[f]:                
+                for k, v in data[f]['additional_coord_values'].items():
+                    column_data[k] = v
+            
+                    
         lines.append(column_data)
-    
+            
     df = pd.DataFrame(lines)        
     assert set(df.columns) == set(columns), 'mismatch in expected columns'
         
@@ -527,13 +560,23 @@ def to_intake_esm():
         if d['attribute_name'] in columns
     ]    
     
+    if agg_member_id and 'member_id' in catalog_def['aggregation_control']['groupby_attrs']:
+        groupby_attrs = catalog_def['aggregation_control']['groupby_attrs']
+        groupby_attrs = [v for v in groupby_attrs if v not in ['member_id']]
+
+        catalog_def['aggregation_control']['groupby_attrs'] = groupby_attrs
+
+        catalog_def['aggregation_control']['aggregations'].append(
+            dict(type='join_new', attribute_name='member_id')
+        )        
+    
     # persist
     df.to_csv(catalog_csv_file, index=False)
     
     with open(catalog_json_file, 'w') as fid:
         json.dump(catalog_def, fid)
         
-    return catalog_json_file
+    return intake.open_esm_datastore(catalog_json_file)
     
     
 
